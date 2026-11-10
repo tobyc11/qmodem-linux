@@ -21,6 +21,9 @@ chmod 755 "$rootfs/usr/sbin/policy-rc.d"
 runner=(systemd-nspawn --settings=no --register=no --resolv-conf=copy-host \
     --directory="$rootfs" --setenv=DEBIAN_FRONTEND=noninteractive)
 "${runner[@]}" /debootstrap/debootstrap --second-stage
+# debootstrap removes policy-rc.d during finalization; block service starts again.
+printf '#!/bin/sh\nexit 101\n' > "$rootfs/usr/sbin/policy-rc.d"
+chmod 755 "$rootfs/usr/sbin/policy-rc.d"
 "${runner[@]}" \
     --bind-ro="$project_dir/deployment/debian-configure.sh:/qmodem-configure.sh" \
     --bind-ro="$project_dir/deployment/debian-server-configure.sh:/qmodem-server-configure.sh" \

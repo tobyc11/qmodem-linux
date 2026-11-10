@@ -13,4 +13,4 @@ apt-get clean
 dpkg --audit
 mkdir -p /var/lib/qmodem
 dpkg-query -W > /var/lib/qmodem/build-packages.tsv
-rm /usr/sbin/policy-rc.d
+rm -f /usr/sbin/policy-rc.d
