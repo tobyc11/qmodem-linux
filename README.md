@@ -107,3 +107,7 @@ publish/run it. The workflow does not need access to the local host or USB devic
 The persistent-root initramfs, RAM systemd test and offline installation review are
 documented in [PERSISTENT_ROOT.md](PERSISTENT_ROOT.md). Deployment is a separate,
 explicitly approved operation; the Actions workflow does not flash a device.
+
+Board Wi-Fi source support and private firmware import are documented in
+[WIFI.md](WIFI.md). Default CI artifacts contain no OEM radio firmware or
+board calibration.

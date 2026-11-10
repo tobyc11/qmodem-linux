@@ -1,0 +1,17 @@
+[Unit]
+Description=Initialize UFI103S WCNSS Wi-Fi radio
+After=local-fs.target systemd-udev-trigger.service
+Before=network-pre.target
+Wants=network-pre.target
+ConditionPathExists=/sys/bus/platform/drivers/qcom-wcnss-pil
+ConditionPathExists=/lib/firmware/wcnss.mdt
+ConditionPathExists=/lib/firmware/wlan/prima/WCNSS_qcom_wlan_nv.bin
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/qmodem-wifi-start
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

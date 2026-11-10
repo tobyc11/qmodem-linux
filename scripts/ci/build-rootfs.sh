@@ -31,6 +31,10 @@ chmod 755 "$rootfs/usr/sbin/policy-rc.d"
     --setenv="QMODEM_ADMIN_USER=$QMODEM_ADMIN_USER" \
     --setenv="QMODEM_ROOT_PARTUUID=$root_partuuid" \
     /bin/sh -ec '/bin/sh /qmodem-configure.sh; /bin/sh /qmodem-server-configure.sh'
+# Source-only Wi-Fi service; its conditions skip boards without local firmware.
+install -D -m 755 deployment/wifi/qmodem-wifi-start "$rootfs/usr/local/sbin/qmodem-wifi-start"
+install -D -m 644 deployment/wifi/qmodem-wifi.service "$rootfs/etc/systemd/system/qmodem-wifi.service"
+ln -s ../qmodem-wifi.service "$rootfs/etc/systemd/system/multi-user.target.wants/qmodem-wifi.service"
 # Never export build-machine identities or generated server private keys.
 rm -f "$rootfs"/etc/ssh/ssh_host_* "$rootfs/var/lib/systemd/random-seed"
 rm -f "$rootfs/etc/machine-id" "$rootfs/etc/resolv.conf" \

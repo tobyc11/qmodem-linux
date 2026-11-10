@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Local tests for public-key input and artifact rejection; no root/network/device."""
+import zlib
 import gzip
 import hashlib
 import io
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import struct
 import sys
 import tarfile
 import tempfile
@@ -99,8 +101,18 @@ class CITests(unittest.TestCase):
         self.key=(REPO/'build/rescue_ed25519.pub').read_text()
         out=self.fixture()
         shutil.copyfile(REPO/'images/ufi103s-rescue.img',out/'ufi103s-rescue.img')
-        shutil.copyfile(REPO/'build/linux/arch/arm64/boot/Image.gz',out/'Image.gz')
-        shutil.copyfile(REPO/'build/linux/arch/arm64/boot/dts/qcom/msm8916-qmodem-rescue.dtb',out/'msm8916-qmodem-rescue.dtb')
+        # A later development kernel need not match the preserved rescue image.
+        image=(out/'ufi103s-rescue.img').read_bytes()
+        klen=struct.unpack_from('<I',image,8)[0]
+        page=struct.unpack_from('<I',image,36)[0]
+        kernel=image[page:page+klen]
+        stream=zlib.decompressobj(16+zlib.MAX_WBITS)
+        stream.decompress(kernel)
+        self.assertTrue(stream.eof)
+        dtb=stream.unused_data
+        self.assertTrue(dtb.startswith(b'\xd0\x0d\xfe\xed'))
+        (out/'Image.gz').write_bytes(kernel[:-len(dtb)])
+        (out/'msm8916-qmodem-rescue.dtb').write_bytes(dtb)
         self.checksums(); result=self.verify()
         self.assertEqual(result.returncode,0,result.stderr)
 

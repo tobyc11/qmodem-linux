@@ -12,10 +12,10 @@ index dffdb219f..78f246a5b 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-wingtech-wt88047.dtb
 diff --git a/arch/arm64/boot/dts/qcom/msm8916-qmodem-rescue.dts b/arch/arm64/boot/dts/qcom/msm8916-qmodem-rescue.dts
 new file mode 100644
-index 000000000..f1bcaf481
+index 000000000..6ac105803
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/msm8916-qmodem-rescue.dts
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,52 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +// UFI103S V03: validated UFI001C USB/eMMC/red LED wiring, with minimal TF-A.
 +#include "msm8916-thwc-ufi001c.dts"
@@ -55,7 +55,12 @@ index 000000000..f1bcaf481
 +&gpu_iommu { status = "disabled"; };
 +&apps_iommu { status = "disabled"; };
 +&mpss { status = "disabled"; };
-+&wcnss { status = "disabled"; };
++/* Minimal TF-A delegates WCNSS reset/loading to the non-secure driver. */
++&wcnss {
++	status = "okay";
++	resets = <&gcc GCC_WCSS_RESTART>;
++	qcom,halt-regs = <&tcsr 0x1b000>;
++};
 +&venus { status = "disabled"; };
 +
 +/* Red LED GPIO22 is physically verified. Other board GPIOs are unverified. */
@@ -640,3 +645,400 @@ index 000000000..5245f4524
 +CONFIG_DEBUG_FS=y
 +# CONFIG_FTRACE is not set
 +CONFIG_MEMTEST=y
+diff --git a/drivers/clk/qcom/gcc-msm8916.c b/drivers/clk/qcom/gcc-msm8916.c
+index e91406e6f..f08328520 100644
+--- a/drivers/clk/qcom/gcc-msm8916.c
++++ b/drivers/clk/qcom/gcc-msm8916.c
+@@ -3311,6 +3311,7 @@ static struct gdsc *gcc_msm8916_gdscs[] = {
+ };
+ 
+ static const struct qcom_reset_map gcc_msm8916_resets[] = {
++	[GCC_WCSS_RESTART] = { 0x11000 },
+ 	[GCC_BLSP1_BCR] = { 0x01000 },
+ 	[GCC_BLSP1_QUP1_BCR] = { 0x02000 },
+ 	[GCC_BLSP1_UART1_BCR] = { 0x02038 },
+diff --git a/drivers/remoteproc/qcom_wcnss.c b/drivers/remoteproc/qcom_wcnss.c
+index 0a0eb1d7d..8256f44b7 100644
+--- a/drivers/remoteproc/qcom_wcnss.c
++++ b/drivers/remoteproc/qcom_wcnss.c
+@@ -11,6 +11,10 @@
+ #include <linux/delay.h>
+ #include <linux/firmware.h>
+ #include <linux/interrupt.h>
++#include <linux/mfd/syscon.h>
++#include <linux/iopoll.h>
++#include <linux/regmap.h>
++#include <linux/reset.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/io.h>
+@@ -54,6 +58,37 @@
+ 
+ #define WCNSS_MAX_PDS			2
+ 
++#define WCNSS_PMU_COMMON_GDSCR				0x24
++#define WCNSS_PMU_COMMON_GDSCR_SW_COLLAPSE		BIT(0)
++
++#define WCNSS_PMU_COMMON_CPU_CBCR			0x30
++#define WCNSS_PMU_COMMON_CPU_CBCR_CLK_EN		BIT(0)
++#define WCNSS_PMU_COMMON_CPU_CLK_OFF			BIT(31)
++
++#define WCNSS_PMU_COMMON_AHB_CBCR			0x34
++#define WCNSS_PMU_COMMON_AHB_CBCR_CLK_EN		BIT(0)
++#define WCNSS_PMU_COMMON_AHB_CLK_OFF			BIT(31)
++
++#define WCNSS_PMU_COMMON_CSR				0x1040
++#define WCNSS_PMU_COMMON_CSR_A2XB_CFG_EN		BIT(0)
++
++#define WCNSS_PMU_SOFT_RESET				0x104C
++#define WCNSS_PMU_SOFT_RESET_CRCM_CCPU_SOFT_RESET	BIT(10)
++
++#define WCNSS_PMU_CCPU_CTL				0x2000
++#define WCNSS_PMU_CCPU_CTL_REMAP_EN			BIT(2)
++#define WCNSS_PMU_CCPU_CTL_HIGH_IVT			BIT(0)
++
++#define WCNSS_PMU_CCPU_BOOT_REMAP_ADDR			0x2004
++#define WCNSS_CCPU_BOOT_REMAP_SHIFT			16	/* 64 KiB */
++
++#define AXI_HALTREQ_REG					0x0
++#define AXI_HALTACK_REG					0x4
++#define AXI_IDLE_REG					0x8
++
++#define HALT_ACK_TIMEOUT_US				500000
++#define CLK_UPDATE_TIMEOUT_US				500000
++
+ struct wcnss_data {
+ 	size_t pmu_offset;
+ 	size_t spare_offset;
+@@ -67,6 +102,10 @@ struct qcom_wcnss {
+ 	struct device *dev;
+ 	struct rproc *rproc;
+ 
++	void __iomem *pmu_base;
++	struct regmap *halt_map;
++	u32 halt_wcss;
++	struct reset_control *reset;
+ 	void __iomem *pmu_cfg;
+ 	void __iomem *spare_out;
+ 
+@@ -157,9 +196,19 @@ static int wcnss_load(struct rproc *rproc, const struct firmware *fw)
+ 	struct qcom_wcnss *wcnss = rproc->priv;
+ 	int ret;
+ 
+-	ret = qcom_mdt_load(wcnss->dev, fw, rproc->firmware, WCNSS_PAS_ID,
+-			    wcnss->mem_region, wcnss->mem_phys,
+-			    wcnss->mem_size, &wcnss->mem_reloc);
++	if (wcnss->reset) {
++		/* Also cover an initial probe after a warm boot. */
++		ret = reset_control_assert(wcnss->reset);
++		if (ret)
++			return ret;
++		ret = qcom_mdt_load_no_init(wcnss->dev, fw, rproc->firmware,
++					    wcnss->mem_region, wcnss->mem_phys,
++					    wcnss->mem_size, &wcnss->mem_reloc);
++	} else {
++		ret = qcom_mdt_load(wcnss->dev, fw, rproc->firmware, WCNSS_PAS_ID,
++				    wcnss->mem_region, wcnss->mem_phys,
++				    wcnss->mem_size, &wcnss->mem_reloc);
++	}
+ 	if (ret)
+ 		return ret;
+ 
+@@ -178,9 +227,10 @@ static void wcnss_indicate_nv_download(struct qcom_wcnss *wcnss)
+ 	writel(val, wcnss->spare_out);
+ }
+ 
+-static void wcnss_configure_iris(struct qcom_wcnss *wcnss)
++static int wcnss_configure_iris(struct qcom_wcnss *wcnss)
+ {
+-	u32 val;
++	u32 val, status;
++	int ret;
+ 
+ 	/* Clear PMU cfg register */
+ 	writel(0, wcnss->pmu_cfg);
+@@ -201,8 +251,10 @@ static void wcnss_configure_iris(struct qcom_wcnss *wcnss)
+ 	writel(val, wcnss->pmu_cfg);
+ 
+ 	/* Wait for PMU.iris_reg_reset_sts */
+-	while (readl(wcnss->pmu_cfg) & WCNSS_PMU_IRIS_RESET_STS)
+-		cpu_relax();
++	ret = readl_poll_timeout(wcnss->pmu_cfg, status,
++				 !(status & WCNSS_PMU_IRIS_RESET_STS), 10, 500000);
++	if (ret)
++		return ret;
+ 
+ 	/* Clear IRIS reset */
+ 	val &= ~WCNSS_PMU_IRIS_RESET;
+@@ -213,8 +265,10 @@ static void wcnss_configure_iris(struct qcom_wcnss *wcnss)
+ 	writel(val, wcnss->pmu_cfg);
+ 
+ 	/* Wait for XO configuration to finish */
+-	while (readl(wcnss->pmu_cfg) & WCNSS_PMU_IRIS_XO_CFG_STS)
+-		cpu_relax();
++	ret = readl_poll_timeout(wcnss->pmu_cfg, status,
++				 !(status & WCNSS_PMU_IRIS_XO_CFG_STS), 10, 500000);
++	if (ret)
++		return ret;
+ 
+ 	/* Stop IRIS XO configuration */
+ 	val &= ~WCNSS_PMU_GC_BUS_MUX_SEL_TOP;
+@@ -223,6 +277,103 @@ static void wcnss_configure_iris(struct qcom_wcnss *wcnss)
+ 
+ 	/* Add some delay for XO to settle */
+ 	msleep(20);
++	return 0;
++}
++
++static int wcnss_reset_no_pas(struct qcom_wcnss *wcnss)
++{
++	phys_addr_t start_addr = wcnss->mem_phys;
++	void __iomem *base = wcnss->pmu_base;
++	u32 reg;
++	int ret;
++
++	if (start_addr & (BIT(WCNSS_CCPU_BOOT_REMAP_SHIFT) - 1)) {
++		dev_err(wcnss->dev, "start address not aligned to 64 KiB\n");
++		return -EINVAL;
++	}
++
++	/* Configure boot address */
++	writel(start_addr >> WCNSS_CCPU_BOOT_REMAP_SHIFT,
++	       base + WCNSS_PMU_CCPU_BOOT_REMAP_ADDR);
++
++	/* Use the high vector table */
++	reg = readl(base + WCNSS_PMU_CCPU_CTL);
++	reg |= WCNSS_PMU_CCPU_CTL_REMAP_EN | WCNSS_PMU_CCPU_CTL_HIGH_IVT;
++	writel(reg, base + WCNSS_PMU_CCPU_CTL);
++
++	/* Turn on AHB clock of common_ss */
++	reg = readl(base + WCNSS_PMU_COMMON_AHB_CBCR);
++	reg |= WCNSS_PMU_COMMON_AHB_CBCR_CLK_EN;
++	writel(reg, base + WCNSS_PMU_COMMON_AHB_CBCR);
++
++	/* Turn on CPU clock of common_ss */
++	reg = readl(base + WCNSS_PMU_COMMON_CPU_CBCR);
++	reg |= WCNSS_PMU_COMMON_CPU_CBCR_CLK_EN;
++	writel(reg, base + WCNSS_PMU_COMMON_CPU_CBCR);
++
++	/* Enable A2XB bridge */
++	reg = readl(base + WCNSS_PMU_COMMON_CSR);
++	reg |= WCNSS_PMU_COMMON_CSR_A2XB_CFG_EN;
++	writel(reg, base + WCNSS_PMU_COMMON_CSR);
++
++	/* Enable common_ss power */
++	reg = readl(base + WCNSS_PMU_COMMON_GDSCR);
++	reg &= ~WCNSS_PMU_COMMON_GDSCR_SW_COLLAPSE;
++	writel(reg, base + WCNSS_PMU_COMMON_GDSCR);
++
++	/* Wait for AHB clock to be on */
++	ret = readl_poll_timeout(base + WCNSS_PMU_COMMON_AHB_CBCR,
++				 reg, !(reg & WCNSS_PMU_COMMON_AHB_CLK_OFF),
++				 0, CLK_UPDATE_TIMEOUT_US);
++	if (ret) {
++		dev_err(wcnss->dev, "common ahb clk enable timeout\n");
++		return ret;
++	}
++
++	/* Wait for CPU clock to be on */
++	ret = readl_poll_timeout(base + WCNSS_PMU_COMMON_CPU_CBCR,
++				 reg, !(reg & WCNSS_PMU_COMMON_CPU_CLK_OFF),
++				 0, CLK_UPDATE_TIMEOUT_US);
++	if (ret) {
++		dev_err(wcnss->dev, "common cpu clk enable timeout\n");
++		return ret;
++	}
++
++	/* Deassert ARM9 software reset */
++	reg = readl(base + WCNSS_PMU_SOFT_RESET);
++	reg &= ~WCNSS_PMU_SOFT_RESET_CRCM_CCPU_SOFT_RESET;
++	writel(reg, base + WCNSS_PMU_SOFT_RESET);
++
++	return 0;
++}
++
++static int wcnss_shutdown_no_pas(struct qcom_wcnss *wcnss)
++{
++	unsigned int reg;
++	int ret;
++
++	/* Assert AXI halt request */
++	regmap_write(wcnss->halt_map, wcnss->halt_wcss + AXI_HALTREQ_REG, 1);
++	/* Wait for halt */
++	ret = regmap_read_poll_timeout(wcnss->halt_map, wcnss->halt_wcss + AXI_HALTACK_REG,
++				       reg, reg, 50, HALT_ACK_TIMEOUT_US);
++	if (ret)
++		dev_err(wcnss->dev, "Port halt timeout\n");
++
++	ret = regmap_read(wcnss->halt_map, wcnss->halt_wcss + AXI_IDLE_REG, &reg);
++	if (ret || !reg)
++		dev_err(wcnss->dev, "Port halt failed\n");
++
++	/* Clear halt request (port will remain halted until reset) */
++	regmap_write(wcnss->halt_map, wcnss->halt_wcss + AXI_HALTREQ_REG, 0);
++
++	/* Keep the core in reset while the next MDT image is loaded. */
++	ret = reset_control_assert(wcnss->reset);
++	if (ret) {
++		dev_err(wcnss->dev, "reset failed: %d\n", ret);
++		return ret;
++	}
++	return 0;
+ }
+ 
+ static int wcnss_start(struct rproc *rproc)
+@@ -254,13 +405,26 @@ static int wcnss_start(struct rproc *rproc)
+ 	if (ret)
+ 		goto disable_regulators;
+ 
++	/* Release the subsystem reset before accessing its IRIS handshake.
++	 * The ARM9 software reset remains asserted until reset_no_pas().
++	 */
++	if (wcnss->reset) {
++		ret = reset_control_deassert(wcnss->reset);
++		if (ret)
++			goto disable_iris;
++	}
+ 	wcnss_indicate_nv_download(wcnss);
+-	wcnss_configure_iris(wcnss);
++	ret = wcnss_configure_iris(wcnss);
++	if (ret) {
++		dev_err(wcnss->dev, "IRIS configuration timed out\n");
++		goto disable_iris;
++	}
+ 
+-	ret = qcom_scm_pas_auth_and_reset(WCNSS_PAS_ID);
++	ret = wcnss->reset ? wcnss_reset_no_pas(wcnss) :
++		qcom_scm_pas_auth_and_reset(WCNSS_PAS_ID);
+ 	if (ret) {
+ 		dev_err(wcnss->dev,
+-			"failed to authenticate image and release reset\n");
++			"failed to release WCNSS reset\n");
+ 		goto disable_iris;
+ 	}
+ 
+@@ -269,6 +433,7 @@ static int wcnss_start(struct rproc *rproc)
+ 	if (wcnss->ready_irq > 0 && ret == 0) {
+ 		/* We have a ready_irq, but it didn't fire in time. */
+ 		dev_err(wcnss->dev, "start timed out\n");
++		wcnss->reset ? wcnss_shutdown_no_pas(wcnss) :
+ 		qcom_scm_pas_shutdown(WCNSS_PAS_ID);
+ 		ret = -ETIMEDOUT;
+ 		goto disable_iris;
+@@ -311,7 +476,8 @@ static int wcnss_stop(struct rproc *rproc)
+ 					    0);
+ 	}
+ 
+-	ret = qcom_scm_pas_shutdown(WCNSS_PAS_ID);
++	ret = wcnss->reset ? wcnss_shutdown_no_pas(wcnss) :
++		qcom_scm_pas_shutdown(WCNSS_PAS_ID);
+ 	if (ret)
+ 		dev_err(wcnss->dev, "failed to shutdown: %d\n", ret);
+ 
+@@ -415,6 +581,9 @@ static int wcnss_init_pds(struct qcom_wcnss *wcnss,
+ 		wcnss->pds[i] = dev_pm_domain_attach_by_name(wcnss->dev, pd_names[i]);
+ 		if (IS_ERR_OR_NULL(wcnss->pds[i])) {
+ 			ret = PTR_ERR(wcnss->pds[i]) ? : -ENODATA;
++			/* RPM power domains may arrive asynchronously after initcalls. */
++			if (ret == -ENODEV && wcnss->reset)
++				ret = -EPROBE_DEFER;
+ 			for (i--; i >= 0; i--)
+ 				dev_pm_domain_detach(wcnss->pds[i], false);
+ 			return ret;
+@@ -445,19 +614,15 @@ static int wcnss_init_regulators(struct qcom_wcnss *wcnss,
+ {
+ 	const struct wcnss_vreg_info *info = data->vregs;
+ 	struct regulator_bulk_data *bulk;
+-	size_t i, possible_pds = 0, num_vregs = data->num_vregs;
++	size_t i, num_vregs = data->num_vregs;
+ 	int ret;
+ 
+-	for (i = 0; i < WCNSS_MAX_PDS; i++)
+-		if (data->pd_names[i])
+-			possible_pds++;
+-
+ 	/*
+ 	 * If attaching the power domains suceeded we can skip requesting
+ 	 * the regulators for the power domains. For old device trees we need to
+ 	 * reserve extra space to manage them through the regulator interface.
+ 	 */
+-	if (possible_pds >= num_vregs) {
++	if (!data->num_pd_vregs) {
+ 		/* Do nothing if vregs do not include PD regulators (pronto-v3) */
+ 	} else if (wcnss->num_pds) {
+ 		info += wcnss->num_pds;
+@@ -557,6 +722,33 @@ static int wcnss_alloc_memory_region(struct qcom_wcnss *wcnss)
+ 	return 0;
+ }
+ 
++static int wcnss_probe_no_pas(struct qcom_wcnss *wcnss)
++{
++	struct device *dev = wcnss->dev;
++	struct of_phandle_args args;
++	int ret;
++
++	wcnss->reset = devm_reset_control_get_exclusive(dev, NULL);
++	if (IS_ERR(wcnss->reset))
++		return dev_err_probe(dev, PTR_ERR(wcnss->reset),
++				     "failed to get reset\n");
++
++	ret = of_parse_phandle_with_fixed_args(dev->of_node, "qcom,halt-regs",
++					       1, 0, &args);
++	if (ret < 0) {
++		dev_err(dev, "failed to parse qcom,halt-regs\n");
++		return -EINVAL;
++	}
++
++	wcnss->halt_map = syscon_node_to_regmap(args.np);
++	of_node_put(args.np);
++	if (IS_ERR(wcnss->halt_map))
++		return PTR_ERR(wcnss->halt_map);
++
++	wcnss->halt_wcss = args.args[0];
++	return 0;
++}
++
+ static int wcnss_probe(struct platform_device *pdev)
+ {
+ 	const char *fw_name = WCNSS_FIRMWARE_NAME;
+@@ -571,11 +763,6 @@ static int wcnss_probe(struct platform_device *pdev)
+ 	if (!qcom_scm_is_available())
+ 		return -EPROBE_DEFER;
+ 
+-	if (!qcom_scm_pas_supported(WCNSS_PAS_ID)) {
+-		dev_err(&pdev->dev, "PAS is not available for WCNSS\n");
+-		return -ENXIO;
+-	}
+-
+ 	ret = of_property_read_string(pdev->dev.of_node, "firmware-name",
+ 				      &fw_name);
+ 	if (ret < 0 && ret != -EINVAL)
+@@ -607,9 +794,16 @@ static int wcnss_probe(struct platform_device *pdev)
+ 	if (ret)
+ 		return ret;
+ 
++	wcnss->pmu_base = mmio;
+ 	wcnss->pmu_cfg = mmio + data->pmu_offset;
+ 	wcnss->spare_out = mmio + data->spare_offset;
+ 
++	if (!qcom_scm_pas_supported(WCNSS_PAS_ID)) {
++		ret = wcnss_probe_no_pas(wcnss);
++		if (ret)
++			return ret;
++	}
++
+ 	/*
+ 	 * We might need to fallback to regulators instead of power domains
+ 	 * for old device trees. Don't report an error in that case.
+diff --git a/include/dt-bindings/reset/qcom,gcc-msm8916.h b/include/dt-bindings/reset/qcom,gcc-msm8916.h
+index 1f9be1087..4ab479907 100644
+--- a/include/dt-bindings/reset/qcom,gcc-msm8916.h
++++ b/include/dt-bindings/reset/qcom,gcc-msm8916.h
+@@ -97,4 +97,7 @@
+ #define GCC_PRONTO_TBU_BCR		88
+ #define GCC_SMMU_CATS_BCR		89
+ 
++/* Non-secure WCNSS reset, matching msm8916-mainline TF-A binding. */
++#define GCC_WCSS_RESTART		91
++
+ #endif

@@ -12,9 +12,13 @@ import subprocess
 root = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--artifacts', type=Path, required=True)
+p.add_argument('--kernel', type=Path, help='Explicit locally built kernel override; requires --dtb')
+p.add_argument('--dtb', type=Path)
+p.add_argument('--firmware', type=Path, help='Private local Wi-Fi firmware directory; never uploaded')
 p.add_argument('--output', type=Path, default=root/'build/persistent-root')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=True)
+if bool(a.kernel) != bool(a.dtb): p.error('provide both --kernel and --dtb')
 expected = {}
 for line in (a.artifacts/'SHA256SUMS').read_text().splitlines():
     digest, name = line.split('  ', 1)
@@ -74,6 +78,20 @@ entries['newroot'] = (0o40755,b'')
 for name in entries:
     if name.startswith('etc/dropbear/') or ('.ssh/' in name and not name.endswith('/authorized_keys')):
         p.error('unexpected identity in source initramfs')
+firmware_hashes = {}
+if a.firmware:
+    allowed = re.compile(r'(wcnss\.(mdt|b[0-9]{2})|wlan/prima/WCNSS_qcom_wlan_nv\.bin|regulatory\.db(\.p7s)?)')
+    for directory in ('lib','lib/firmware','lib/firmware/wlan','lib/firmware/wlan/prima'):
+        entries[directory] = (0o40755,b'')
+    for path in sorted(a.firmware.rglob('*')):
+        if path.is_dir(): continue
+        name = str(path.relative_to(a.firmware))
+        if path.is_symlink() or not allowed.fullmatch(name): p.error('unexpected firmware input: '+name)
+        data = path.read_bytes()
+        entries['lib/firmware/'+name] = (0o100644,data)
+        firmware_hashes[name] = hashlib.sha256(data).hexdigest()
+    if 'wcnss.mdt' not in firmware_hashes or 'wlan/prima/WCNSS_qcom_wlan_nv.bin' not in firmware_hashes:
+        p.error('missing WCNSS firmware/calibration')
 output = bytearray()
 for index,(name,(mode,data)) in enumerate([*sorted(entries.items()),('TRAILER!!!',(0,b''))],1):
     values = [index,mode,0,0,1,0,len(data),0,0,0,0,len(name.encode())+1,0]
@@ -84,13 +102,16 @@ for index,(name,(mode,data)) in enumerate([*sorted(entries.items()),('TRAILER!!!
 ramdisk=a.output/'initramfs.cpio.gz'
 ramdisk.write_bytes(gzip.compress(output,mtime=0))
 manifest={'source_rescue_sha256':expected['ufi103s-rescue.img'],'root_partuuid':uuid,
-          'storage_writes':'none; deployment requires separate exact-image approval','files':{}}
+          'storage_writes':'none; deployment requires separate exact-image approval','files':{},
+          'firmware_sha256':firmware_hashes,
+          'kernel_sha256':hashlib.sha256((a.kernel or a.artifacts/'Image.gz').read_bytes()).hexdigest(),
+          'dtb_sha256':hashlib.sha256((a.dtb or a.artifacts/'msm8916-qmodem-rescue.dtb').read_bytes()).hexdigest()}
 for name,test in [('ufi103s-debian.img',False),('ufi103s-debian-ram-test.img',True)]:
     target=a.output/name
     cmd='console=null rdinit=/init loglevel=4 panic=10 lk2nd.pass-ramoops reboot=warm'
     if test: cmd+=' qmodem.test=1'
-    subprocess.run(['python3',str(root/'scripts/mkbootimg.py'),'--kernel',str(a.artifacts/'Image.gz'),
-                    '--dtb',str(a.artifacts/'msm8916-qmodem-rescue.dtb'),'--ramdisk',str(ramdisk),
+    subprocess.run(['python3',str(root/'scripts/mkbootimg.py'),'--kernel',str(a.kernel or a.artifacts/'Image.gz'),
+                    '--dtb',str(a.dtb or a.artifacts/'msm8916-qmodem-rescue.dtb'),'--ramdisk',str(ramdisk),
                     '--output',str(target),'--cmdline',cmd],check=True)
     if target.stat().st_size>15*1024**2:p.error('boot image exceeds deployment budget')
     manifest['files'][name]={'bytes':target.stat().st_size,'sha256':hashlib.sha256(target.read_bytes()).hexdigest()}
