@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+. /etc/qmodem-root.conf
+marker=/newroot/etc/qmodem-release
+[ -f "$marker" ]
+grep -qx 'profile=ufi103s-v03' "$marker"
+grep -qx 'suite=trixie' "$marker"
+grep -qx "root_partuuid=$QMODEM_ROOT_PARTUUID" "$marker"
+[ -x /newroot/sbin/init ]
+for directory in dev proc sys run; do
+    [ -d "/newroot/$directory" ] && [ ! -L "/newroot/$directory" ]
+done

@@ -1,0 +1,43 @@
+#!/bin/sh
+# PID 1: identify the approved Debian root; never format or repair storage.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /run /newroot /sys/kernel/config
+mount -t tmpfs -o mode=755,size=16m tmpfs /run
+exec >/dev/kmsg 2>&1
+. /etc/qmodem-root.conf
+rescue() {
+    echo "qmodem: $*; starting RAM rescue"
+    exec /rescue-init
+}
+# The explicit test image never probes eMMC for its root.
+case " $(cat /proc/cmdline) " in
+    *' qmodem.test=1 '*) rescue 'RAM systemd test mode';;
+esac
+rootdev=
+for attempt in 1 2 3 4 5; do
+    for entry in /sys/class/block/*/uevent; do
+        if grep -qx "PARTUUID=$QMODEM_ROOT_PARTUUID" "$entry"; then
+            name=$(sed -n 's/^DEVNAME=//p' "$entry")
+            rootdev=/dev/$name
+            break
+        fi
+    done
+    [ -n "$rootdev" ] && break
+    sleep 1
+done
+[ -b "$rootdev" ] || rescue 'expected root PARTUUID not found'
+case "$(blkid "$rootdev")" in *'TYPE="ext4"'*) ;; *) rescue 'root is not ext4';; esac
+# Probe without journal replay: stock userdata must not be changed or booted.
+mount -t ext4 -o ro,noload "$rootdev" /newroot || rescue 'root probe mount failed'
+if ! /sbin/qmodem-check-root; then
+    umount /newroot
+    rescue 'root profile/init validation failed'
+fi
+umount /newroot || rescue 'root probe unmount failed'
+# Only an explicitly provisioned qmodem Debian root reaches this normal mount.
+mount -t ext4 -o ro "$rootdev" /newroot || rescue 'Debian root mount failed'
+/sbin/qmodem-usb-gadget || rescue 'USB gadget setup failed'
+exec /sbin/qmodem-handoff

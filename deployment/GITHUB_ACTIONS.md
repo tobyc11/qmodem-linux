@@ -103,3 +103,7 @@ Native debootstrap/root service configuration must still pass on an actual hoste
 runner; local syntax/parser tests are not a successful cloud build or a modem
 boot test. A repository target and valid GitHub authentication are needed to
 publish/run it. The workflow does not need access to the local host or USB device.
+
+The persistent-root initramfs, RAM systemd test and offline installation review are
+documented in [PERSISTENT_ROOT.md](PERSISTENT_ROOT.md). Deployment is a separate,
+explicitly approved operation; the Actions workflow does not flash a device.

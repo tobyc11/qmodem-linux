@@ -1,0 +1,25 @@
+#!/bin/sh
+# This script must be exec'd by PID 1 so switch_root can release the initramfs.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+rescue() {
+    echo "qmodem: handoff failed: $*"
+    # Restore any moved mounts before restarting the known rescue script.
+    for directory in run dev sys proc; do
+        mountpoint -q "/newroot/$directory" && mount --move "/newroot/$directory" "/$directory"
+    done
+    exec /rescue-init
+}
+[ "$$" = 1 ] || { echo 'handoff must replace PID 1' >&2; exit 1; }
+/sbin/qmodem-check-root || rescue 'root validation'
+for directory in proc sys dev run; do
+    mountpoint -q "/$directory" || rescue "missing /$directory mount"
+done
+# Transfer one gadget to networkd. No rescue DHCP or SSH process survives.
+killall udhcpd 2>/dev/null || true
+killall dropbear 2>/dev/null || true
+printf 'initramfs=validated\n' > /run/qmodem-handoff
+for directory in proc sys dev run; do
+    mount --move "/$directory" "/newroot/$directory" || rescue "move /$directory"
+done
+echo 'qmodem: switching to Debian systemd'
+exec switch_root /newroot /sbin/init
