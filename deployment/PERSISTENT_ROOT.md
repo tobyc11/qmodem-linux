@@ -92,3 +92,27 @@ existing filesystem/extlinux scan actually selects this boot image. Check
 systemd health, ext4 root PARTUUID/read-write mount, host-key/config/data
 persistence across resets, rescue reachability and sustained workload. Preserve
 all off-device backups and the known-good RAM rescue image.
+
+## Installed-system validation completed
+
+The explicitly approved boot and userdata images were written and each full
+partition was independently readback-hashed against its reviewed SHA256. GPT and
+all 25 protected partition hashes matched the pre-write snapshot. The unchanged
+LK `fastboot continue` command then booted the installed Android boot image;
+there was no RAM-image download on this start. Debian identified the intended
+userdata PARTUUID, fsck reported clean, and systemd remounted root read/write.
+
+Two installed starts through LK and an orderly Debian reboot were tested.
+Systemd reported running with zero failed units. A 64 MiB payload, deployment
+configuration, machine ID and SSH host identity persisted with matching hashes
+across reboot. The payload was removed afterward. All 160 CPU frequency requests
+and a 120-second four-core affinity/memory-integrity test passed, with a maximum
+sampled temperature of 54 C. LEDs remained off.
+
+Use `bash scripts/ssh-debian.sh` for normal `dave` access; the older
+`ssh-rescue.sh` remains for the separate RAM rescue system. The helper uses the
+local private key and dedicated Debian known-hosts file, neither committed.
+The installation and validation logs remain local under `build/persistent-root`.
+Cold-power-cycle testing, long-duration qualification and an Internet uplink/time
+synchronization remain outstanding. Reset still stops at LK until the host sends
+`fastboot continue`, as designed.

@@ -12,6 +12,7 @@ files=(
  'scripts/build-kernel.sh', 'scripts/build-userspace.sh', 'scripts/pack-rescue.sh',
  'scripts/rescue-init', 'scripts/mkbootimg.py',
  'scripts/verify-debian-ext4.py', 'scripts/prepare-deployment-review.py',
+ 'scripts/ssh-debian.sh',
  'scripts/pack-persistent.py', 'scripts/build-debian-ext4.py', 'scripts/install-debian.py',
  'scripts/initramfs/init', 'scripts/initramfs/check-root', 'scripts/initramfs/usb-gadget',
  'scripts/initramfs/handoff', 'scripts/initramfs/prepare-ram-test',
