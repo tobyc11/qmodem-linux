@@ -13,7 +13,7 @@ export DEBIAN_FRONTEND=noninteractive
 # --foreign separates extraction from package scripts so policy-rc.d is in place.
 # The second stage runs natively: no QEMU or binfmt registration.
 debootstrap --arch=arm64 --foreign --variant=minbase --components=main \
-    --force-check-sig --keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
+    --force-check-gpg --keyring=/usr/share/keyrings/debian-archive-keyring.gpg \
     --include=systemd-sysv,udev,openssh-server,sudo,iproute2,iputils-ping,ca-certificates,systemd-timesyncd,e2fsprogs,procps,dbus,libpam-systemd \
     trixie "$rootfs" https://deb.debian.org/debian
 printf '#!/bin/sh\nexit 101\n' > "$rootfs/usr/sbin/policy-rc.d"
