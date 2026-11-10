@@ -1,0 +1,21 @@
+{
+  "kernel": {
+    "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+    "tag": "v6.18.62",
+    "commit": "c3f63d70f236bb7685e6d11d1d9b5b351552e600"
+  },
+  "archives": [
+    {
+      "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+      "filename": "busybox-1.37.0.tar.bz2",
+      "directory": "busybox-1.37.0",
+      "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
+    },
+    {
+      "url": "https://matt.ucc.asn.au/dropbear/releases/dropbear-2024.86.tar.bz2",
+      "filename": "dropbear-2024.86.tar.bz2",
+      "directory": "dropbear-2024.86",
+      "sha256": "e78936dffc395f2e0db099321d6be659190966b99712b55c530dd0a1822e0a5e"
+    }
+  ]
+}

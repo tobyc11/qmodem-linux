@@ -1,0 +1,104 @@
+{
+  "status": "DESIGN ONLY; no deployment/storage writes authorized or performed",
+  "target_serial": "430172fb",
+  "sector_bytes": 512,
+  "gpt_sha256": "34c8a2d951abb616426d4ea483cdb23d278bf729a69bc04e1e33b5113ace04ea",
+  "gpt_changes": false,
+  "storage_partition": "userdata",
+  "partitions": {
+    "boot": {
+      "partition_number": 22,
+      "start_lba": 396384,
+      "bytes": 16777216,
+      "partuuid": "ee8de777-10d5-9d19-572a-18e0f3c3de69"
+    },
+    "userdata": {
+      "partition_number": 27,
+      "start_lba": 2428000,
+      "bytes": 2665938432,
+      "partuuid": "598664a9-7976-e692-1cdd-010c5d49b568"
+    }
+  },
+  "boot_image_max_bytes": 15728640,
+  "protected_partitions": [
+    "DDR",
+    "aboot",
+    "abootbak",
+    "cache",
+    "fsc",
+    "fsg",
+    "hyp",
+    "hypbak",
+    "misc",
+    "modem",
+    "modemst1",
+    "modemst2",
+    "pad",
+    "persist",
+    "recovery",
+    "rpm",
+    "rpmbak",
+    "sbl1",
+    "sbl1bak",
+    "sec",
+    "splash",
+    "ssd",
+    "system",
+    "tz",
+    "tzbak"
+  ],
+  "initial_write_order": [
+    "fresh verified boot/userdata backups",
+    "build and RAM-test Debian/root-mount rescue",
+    "exact-image and destructive-target review",
+    "after approval format userdata and install Debian",
+    "write/read back boot",
+    "start installed system with fastboot continue; test persistence and load"
+  ],
+  "deployment": "Single Debian ext4 root, existing unmodified forced-fastboot LK; host fastboot continue starts installed OS",
+  "root": {
+    "partition": "userdata",
+    "filesystem": "ext4",
+    "read_only": false,
+    "partuuid": "598664a9-7976-e692-1cdd-010c5d49b568"
+  },
+  "boot": {
+    "partition": "boot",
+    "format": "Android boot image with kernel, DTB and rescue-capable initramfs"
+  },
+  "rescue": {
+    "method": "Existing LK forced-fastboot on every power-on/reset; RAM-boot known-good rescue",
+    "lk_changes": false,
+    "misc_changes": false,
+    "automatic_rollback": false,
+    "host_required_to_start_installed_os": true,
+    "start_command": "fastboot -s 430172fb continue"
+  },
+  "unchanged_partitions": [
+    "DDR",
+    "aboot",
+    "abootbak",
+    "cache",
+    "fsc",
+    "fsg",
+    "hyp",
+    "hypbak",
+    "misc",
+    "modem",
+    "modemst1",
+    "modemst2",
+    "pad",
+    "persist",
+    "recovery",
+    "rpm",
+    "rpmbak",
+    "sbl1",
+    "sbl1bak",
+    "sec",
+    "splash",
+    "ssd",
+    "system",
+    "tz",
+    "tzbak"
+  ]
+}

@@ -1,0 +1,13 @@
+/build/
+/downloads/
+/images/
+/artifacts/
+/platform-tools/
+/platform-tools-linux.zip
+/src/
+/backups/
+/firmware/openstick-v1-generic/
+/firmware/proposal/*.bin
+/firmware/source-built/*.mbn
+/firmware/source-built/*-PROPOSAL.bin
+__pycache__/
