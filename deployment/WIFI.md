@@ -89,7 +89,7 @@ remain untested. Existing unrelated SCM/SMSM/USB warnings remain.
 
 ## Boot-only persistence review
 
-The installed boot partition is still the previously approved Debian image.
+The previous Debian boot image was preserved while the Wi-Fi candidate was RAM-tested.
 A fresh off-device boot backup was independently hashed. The proposed Wi-Fi
 boot image is padded to exactly 16 MiB, and its review includes both old/new
 hashes, backup location and the protected partition baseline.
@@ -100,3 +100,22 @@ fsyncs and independently hashes the complete partition. It checks GPT and all
 25 protected partition hashes before/after. It neither replaces userdata nor
 changes LK/firmware. The installed boot still starts through the existing host
 `fastboot continue` command. Preserve the known-good rescue and all backups.
+
+## Approved boot update installed
+
+The owner approved the exact 16 MiB Wi-Fi boot image. Its full-partition SHA256
+is `83d499f0356874f221b13eaddd7c535004e297793359159639740c75d1efcba0`.
+The updater wrote/readback-verified boot only; GPT and all 25 protected partition
+hashes remained unchanged. Userdata was not replaced. The previous boot backup
+remains under the local `backups/wifi-preinstall-*` directory.
+
+Two installed starts through unchanged LK `fastboot continue` passed. The Wi-Fi
+service started automatically, WCNSS was running, and real scans found 13 then
+16 BSS entries. Systemd reported running with zero failed units; four CPUs were
+online and LEDs off. The interface is administratively up but unassociated.
+No router credentials or AP configuration have been supplied. Full association,
+packet throughput and long-duration operation remain untested.
+
+Local installation evidence is `build/wifi/boot-installation.json`,
+`installed-boot-test.log` and `installed-reboot-test.log`. None of the private
+firmware, calibration, backups or scan contents are published.
